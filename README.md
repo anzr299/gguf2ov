@@ -1,7 +1,6 @@
 # gguf2ov
 
-Convert a GGUF checkpoint — local or on the Hugging Face Hub — into **uncompressed**
-OpenVINO IR.
+Convert a GGUF checkpoint into uncompressed OpenVINO IR.
 
 ## Install
 
@@ -12,10 +11,10 @@ pip install git+https://github.com/anzr299/gguf2ov.git
 ## Use
 
 ```bash
-# local file -- one argument
+# local file: -- one argument
 gguf2ov convert ./Qwen3-8B-Q4_K_M.gguf -o out/qwen3-q4k
 
-# Hub repo id + exact filename
+# Hub: repo id + exact filename
 gguf2ov convert unsloth/Qwen3-8B-GGUF Qwen3-8B-Q4_K_M.gguf -o out/q4k
 ```
 
@@ -34,10 +33,6 @@ gguf2ov convert unsloth/Qwen3-8B-GGUF Qwen3-8B-Q4_K_M.gguf -o out/q4k
 | `--device` | OV device for the checks |
 
 Writes `<out>/ov/` plus `gguf2ov.json` recording provenance, sizes, timings and parity.
-
-## Specifying the GGUF
-
-You name the file; nothing is guessed and no repo is searched.
 
 | invocation | meaning |
 |---|---|
