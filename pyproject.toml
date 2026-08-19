@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gguf2ov"
+version = "0.1.0"
+description = "Convert GGUF checkpoints into uncompressed OpenVINO IR"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "torch>=2.1",
+    "transformers>=4.41",
+    "gguf>=0.10",
+    "openvino>=2024.3",
+    "optimum-intel>=1.18",
+]
+
+[project.scripts]
+gguf2ov = "gguf2ov.cli:main"
+
+[tool.setuptools]
+# The modules live directly in src/; that directory IS the gguf2ov package, so it installs
+# and imports as `gguf2ov` without a redundant src/gguf2ov/ nesting level.
+packages = ["gguf2ov"]
+package-dir = { gguf2ov = "src" }
