@@ -4,4 +4,4 @@ __pycache__/
 build/
 dist/
 .venv/
-gguf2ov-out/
+out/

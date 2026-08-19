@@ -10,11 +10,12 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 dependencies = [
-    "torch>=2.1",
-    "transformers>=4.41",
-    "gguf>=0.10",
-    "openvino>=2024.3",
-    "optimum-intel>=1.18",
+    "torch>=2.13",
+    "transformers>=5.5.4",
+    "gguf>=0.19",
+    "openvino>=20246.3",
+    "optimum-intel>=2.1.0",
+    "accelerate>=1.14.0",
 ]
 
 [project.scripts]

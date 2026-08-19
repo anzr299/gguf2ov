@@ -1,5 +1,3 @@
-"""Command line interface for gguf2ov."""
-
 from __future__ import annotations
 
 import argparse
@@ -7,6 +5,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .errors import Gguf2ovError
 
 EPILOG = """\
 specifying the GGUF:
@@ -67,7 +66,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return {"convert": cmd_convert}[args.command](args)
-    except (FileNotFoundError, ValueError, RuntimeError) as e:
+    # Only our own errors are reduced to a message. Anything else -- a ValueError from
+    # transformers, a RuntimeError from openvino -- is a bug or a broken environment, and is
+    # left to propagate so the traceback survives.
+    except Gguf2ovError as e:
         print(f"gguf2ov: {e}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:

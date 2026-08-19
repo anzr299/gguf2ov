@@ -9,6 +9,7 @@ indistinguishable from a re-quantized one.
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import shutil
 import time
@@ -17,6 +18,19 @@ from pathlib import Path
 from typing import NamedTuple
 
 from . import __version__
+from .errors import (
+    CompressionDetected,
+    SourceError,
+    UnsupportedArchitecture,
+    VerificationError,
+)
+
+__all__ = [
+    "CompressionDetected",
+    "SourceError",
+    "UnsupportedArchitecture",
+    "VerificationError",
+]
 
 SMOKE_PROMPT = "The capital of France is"
 
@@ -41,10 +55,6 @@ def _gb(nbytes: int | float | None) -> str:
 
 def dirsize(path: str | Path) -> int:
     return sum(f.stat().st_size for f in Path(path).rglob("*") if f.is_file())
-
-
-class CompressionDetected(RuntimeError):
-    """Raised when an exported IR turns out to hold compressed weight constants."""
 
 
 class Source(NamedTuple):
@@ -76,14 +86,14 @@ def resolve(source: str, gguf_file: str | None = None) -> Source:
         # A local file needs no second argument; accepting one too would silently become
         # from_pretrained("./model.gguf", gguf_file="model.gguf") -> a bogus joined path.
         if gguf_file is not None:
-            raise ValueError(
+            raise SourceError(
                 f"{source!r} is already a .gguf file, so drop the second argument:\n"
                 f"  gguf2ov convert {source}"
             )
         return Source(str(path.parent), path.name, path.stat().st_size)
 
     if gguf_file is None:
-        raise FileNotFoundError(
+        raise SourceError(
             f"{source!r} is not a readable file. Either give the path to a local .gguf, or "
             f"give a Hub repo id followed by the exact filename:\n"
             f"  gguf2ov convert ./Qwen3-8B-Q4_K_M.gguf\n"
@@ -119,6 +129,49 @@ def _cached_size(src: Source) -> int | None:
         return None
 
 
+# transformers reports an unknown GGUF architecture as a bare ValueError, so its message is
+# the only handle available. Misjudging the match would only pick the less helpful of two
+# messages; the error is reported either way.
+_UNSUPPORTED_ARCH = "is not supported yet"
+
+
+def _supported_architectures() -> list[str]:
+    """GGUF architectures the installed transformers can dequantize."""
+    try:
+        from transformers.integrations.ggml import GGUF_CONFIG_MAPPING
+    except ImportError:  # only used to enrich an error message, so degrade quietly
+        return []
+    # Not architectures: these two hold the shared metadata and tokenizer key maps.
+    return sorted(k for k in GGUF_CONFIG_MAPPING if k not in {"general", "tokenizer"})
+
+
+def _explain_unsupported(exc: ValueError) -> UnsupportedArchitecture:
+    """Turn transformers' terse refusal into something that says what to do instead."""
+    import transformers
+
+    lines = [f"{exc}"]
+    supported = _supported_architectures()
+    if supported:
+        lines.append(f"Architectures supported here: {', '.join(supported)}")
+    return UnsupportedArchitecture("\n  ".join(lines))
+
+
+def _ensure_gguf_version() -> None:
+    """Give the gguf module a __version__, which transformers needs on Python 3.10.
+    transformers looks up a dependency's version through packages_distributions(), which on
+    3.10 is built from top_level.txt alone; the gguf wheel ships none, so gguf is missing
+    from the mapping and transformers falls back to reading gguf.__version__. gguf does not
+    define one, so the fallback yields the string "N/A" and the version comparison in
+    is_gguf_available() dies with InvalidVersion before any GGUF can be loaded. Setting the
+    attribute feeds that documented fallback the real version instead. Harmless on 3.11+,
+    where the mapping is complete and the fallback never runs.
+    """
+    import gguf
+
+    if not hasattr(gguf, "__version__"):
+        gguf.__version__ = importlib.metadata.version("gguf")
+
+
 class DequantOutput(NamedTuple):
     seconds: float
     arch: str
@@ -133,15 +186,22 @@ def dequantize(src: Source, out_dir: Path, dtype_str: str = "float16",
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    _ensure_gguf_version()
+
     dtype = getattr(torch, dtype_str)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"[dequant] {src.gguf_file} ({_gb(src.size)}) -> {dtype_str}")
     t0 = time.time()
-    model = AutoModelForCausalLM.from_pretrained(
-        src.model_id, gguf_file=src.gguf_file, dtype=dtype
-    )
-    tok = AutoTokenizer.from_pretrained(src.model_id, gguf_file=src.gguf_file)
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            src.model_id, gguf_file=src.gguf_file, dtype=dtype
+        )
+        tok = AutoTokenizer.from_pretrained(src.model_id, gguf_file=src.gguf_file)
+    except ValueError as e:
+        if _UNSUPPORTED_ARCH not in str(e):
+            raise
+        raise _explain_unsupported(e) from e
     elapsed = time.time() - t0
     arch = getattr(model.config, "model_type", "?")
 
@@ -271,7 +331,7 @@ def smoke_test_ov(ov_dir: Path, device: str = "CPU", max_new_tokens: int = 24) -
 
     ids = tok(SMOKE_PROMPT, return_tensors="pt")
     if ids["input_ids"].shape[1] == 0:
-        raise RuntimeError(
+        raise VerificationError(
             f"tokenizer in {ov_dir} produced 0 tokens -- its vocab files are missing or "
             "empty, so the IR directory is not self-sufficient"
         )
