@@ -74,55 +74,6 @@ that is an existing path is used directly, otherwise it goes through
 There is no download or discovery code here — that would be a second, worse cache in front of
 a working one.
 
-## How it works
-
-GGUF weights are dequantized to fp16/bf16, saved as a plain torch checkpoint, then exported
-to OV IR.
-
-**This tool performs no weight manipulation of its own.** llama.cpp's converter applies
-per-architecture transforms that are not quantization — the Llama-family Q/K row permute
-reconciling GGML's `(2i, 2i+1)` RoPE pairing with HF's `(i, i+d/2)` pairing, Gemma's
-`norm.weight + 1`, fused-QKV reshapes, MoE expert stacking — and all of those must be
-inverted on the way back. `transformers` owns those inverses
-(`modeling_gguf_pytorch_utils.py::_reverse_permute_weights` and friends) and this tool
-relies on them. Architectures transformers does not recognize are rejected rather than
-silently mis-loaded, so the supported set is:
-
-```python
-from transformers.integrations.ggml import GGUF_CONFIG_MAPPING; print(sorted(GGUF_CONFIG_MAPPING))
-```
-
-## It never compresses
-
-The IR always holds full-precision weights — exactly the values llama.cpp computes with.
-There is deliberately no compression flag: a re-quantized IR looks identical to a faithful
-one from the outside, and conflating them makes the output useless for the accuracy work
-this conversion is actually good for. Run NNCF `compress_weights` on the output as a
-separate, explicit step if you want a compressed model, knowing that it re-derives scales
-from the dequantized values and discards the GGUF's original grid.
-
-Two guards enforce this:
-- `load_in_8bit=False, quantization_config=None` on export, because optimum-intel otherwise
-  applies int8 weight compression by itself for models above ~1B params.
-- `assert_uncompressed()` reads the finished IR back and fails if any weight `Constant` has
-  a low-precision element type (`u4/i4/u8/i8/nf4/f8*/f4e2m1/u2/i2`), so a silent compression
-  regression in a dependency cannot slip through.
-
-## The size cost
-
-Dequantizing discards all compression, and that is not a small effect:
-
-| GGUF | file | OV IR | CPU tok/s |
-|---|---|---|---|
-| Qwen3-8B Q3_K/Q4_K/Q5_K/Q6_K mix | 5.02 GB | 16.38 GB | 6.32 |
-| Qwen3-8B IQ2_S/IQ3_XXS/IQ3_S mix | 3.37 GB | 16.40 GB | 6.20 |
-
-A 3.37 GB model and a 5.02 GB model produce IRs within 20 MB of each other, at the same
-speed. So this is the right method for **accuracy studies** — the IR reproduces the GGUF's
-weights exactly, isolating weight-quantization error from runtime kernel effects — and the
-wrong method for deployment. (llama.cpp also quantizes activations to Q8_0 per 32-block in
-most kernels, so an fp16 IR scores slightly *better* than llama.cpp on the same file.)
-
 ## Commands
 
 **`convert`**
@@ -159,17 +110,3 @@ Because the IR is uncompressed, top-1 agreement below 99% means a real weight or
 **Greedy decoded strings are not a valid parity test.** At 100% top-1 agreement a single
 near-tie can still flip and cascade over a rollout: an early version of this tool reported a
 "mismatch" purely because torch enumerated "Italy, Germany" and OV said "Germany, Italy".
-
-## Gotchas handled for you
-
-1. **optimum-intel silently int8-compresses** models above ~1B params on export. Covered by
-   the two guards above.
-2. **`save_pretrained` on an OV model does not copy tokenizer files.**
-   `AutoTokenizer.from_pretrained(ov_dir)` then returns an empty-vocab tokenizer *with no
-   exception*; prompts tokenize to `[]` and generation dies with `IndexError: index -1 is
-   out of bounds for dimension 1 with size 0` deep inside transformers' sampling loop.
-   `convert` copies the tokenizer and the smoke test asserts a non-empty tokenization.
-3. **Split GGUFs** (`-00001-of-00003.gguf`) cannot be loaded by transformers at all. Merge
-   them first with `llama-gguf-split --merge` and pass the merged file.
-
-Validated with transformers 5.10.2, gguf 0.19.0, optimum-intel 2.0.0, openvino 2026.2.0.
