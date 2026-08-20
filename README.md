@@ -36,7 +36,7 @@ Writes `<out>/ov/` plus `gguf2ov.json` recording provenance, sizes, timings and 
 
 | invocation | meaning |
 |---|---|
-| `convert ./model.gguf` | local file — the second argument is not needed, and passing it is an error |
+| `convert ./model.gguf` | in local file the second argument is not needed, and passing it is an error |
 | `convert owner/repo model.gguf` | Hub repo id + exact filename |
 
 
